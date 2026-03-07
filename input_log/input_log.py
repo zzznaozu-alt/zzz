@@ -31,6 +31,7 @@ import os
 import logging
 from typing import Dict, Set, Tuple, Optional
 import tkinter.font as tkfont  # もし未importなら追加
+from PIL import Image, ImageTk
 
 # ========= 設定 =========
 APP_FPS = 60
@@ -45,6 +46,7 @@ COL_INPUT_CHARS = 8            # input column width in characters
 COL_FRAME_CHARS = 4
 CHROMA_BG = "#00FF00"
 CHROMA_FG = "#000000"
+ICON_SIZE = 28
              # frame column width (e.g. '99F')
 # ========================================
 HISTORY_KEEP = 120
@@ -874,6 +876,25 @@ class OverlayApp:
             anchor="w", padx=10, pady=6
         )
         footer.pack(fill="x")
+        self.icon_images = {}
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            icon_dir = os.path.join(base_dir, "icons")
+
+            def load_icon(filename: str):
+                path = os.path.join(icon_dir, filename)
+                img = Image.open(path).convert("RGBA")
+                img = img.resize((ICON_SIZE, ICON_SIZE), Image.LANCZOS)
+                return ImageTk.PhotoImage(img)
+
+            self.icon_images["□"] = load_icon("basic.png")
+            self.icon_images["×"] = load_icon("dodge.png")
+            self.icon_images["△"] = load_icon("sp.png")
+            self.icon_images["L1"] = load_icon("assist.png")
+            self.icon_images["R1"] = self.icon_images["L1"]
+            self.icon_images["R2"] = load_icon("ult.png")
+        except Exception:
+            logger.warning("icon load failed; fallback to text\n" + traceback.format_exc())
 
         self.root.protocol("WM_DELETE_WINDOW", self.stop)
 
@@ -932,20 +953,50 @@ class OverlayApp:
             else:
                 self.state.set_btn(ev.name, ev.down)
 
-    def _render(self):
-        left, right = self.history.render_columns(HISTORY_LINES, COL_INPUT_CHARS, COL_FRAME_CHARS)
-
+    def _render_input_with_icons(self):
         self.text_input.configure(state="normal")
-        self.text_frames.configure(state="normal")
-
         self.text_input.delete("1.0", "end")
-        self.text_frames.delete("1.0", "end")
 
-        self.text_input.insert("1.0", left)
-        self.text_frames.insert("1.0", right)
+        rows = list(self.history.items)[:HISTORY_LINES]
+
+        for row_idx, (tok, fr) in enumerate(rows):
+            units = self.split_token_units(tok)
+
+            if row_idx > 0:
+                self.text_input.insert("end", "\n")
+
+            for u in units:
+                if u in self.icon_images:
+                    self.text_input.image_create("end", image=self.icon_images[u])
+                else:
+                    self.text_input.insert("end", u)
+
+        while len(rows) < HISTORY_LINES:
+            self.text_input.insert("end", "\n")
+            rows.append(("", 0))
 
         self.text_input.configure(state="disabled")
+
+    def _render(self):
+        rows = list(self.history.items)[:HISTORY_LINES]
+
+        # 左列：文字 + 画像
+        self._render_input_with_icons()
+
+        # 右列：フレーム数
+        right_lines = []
+        for tok, fr in rows:
+            fr_disp = f"{self.history.cap(fr)}F"
+            right_lines.append(f"{fr_disp:<{COL_FRAME_CHARS}}")
+
+        while len(right_lines) < HISTORY_LINES:
+            right_lines.append(" " * COL_FRAME_CHARS)
+
+        self.text_frames.configure(state="normal")
+        self.text_frames.delete("1.0", "end")
+        self.text_frames.insert("1.0", "\n".join(right_lines))
         self.text_frames.configure(state="disabled")
+
         self.root.update_idletasks()
 
     def _tick(self):
@@ -982,6 +1033,30 @@ class OverlayApp:
         logger.info("mainloop start")
         self.root.mainloop()
         self.stop()
+
+    def split_token_units(self, token: str) -> list[str]:
+        units = [
+            "Options", "Share", "Touch",
+            "L1", "R1", "L2", "R2", "L3", "R3", "PS",
+            "↖", "↗", "↙", "↘", "↑", "↓", "←", "→",
+            "□", "×", "○", "△",
+            "N",
+        ]
+
+        result = []
+        i = 0
+        while i < len(token):
+            matched = False
+            for u in units:
+                if token.startswith(u, i):
+                    result.append(u)
+                    i += len(u)
+                    matched = True
+                    break
+            if not matched:
+                result.append(token[i])
+                i += 1
+        return result
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(add_help=True)
